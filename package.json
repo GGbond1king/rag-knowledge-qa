@@ -1,7 +1,8 @@
 {
-  "name": "my-rag",
+  "name": "rag-knowledge-qa",
   "private": true,
   "version": "1.0.0",
+  "description": "混合检索RAG智能问答系统 - 向量+BM25双路召回 / RRF融合排序 / 多模型热切换",
   "type": "module",
   "scripts": {
     "dev": "vite",
