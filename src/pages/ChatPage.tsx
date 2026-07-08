@@ -112,8 +112,9 @@ const ChatPage: React.FC = () => {
           });
         },
         (conversationId) => {
-          // 对话创建完成
-          if (!currentConversation?.id && conversationId) {
+          // 保存 conversation_id，后续消息才能续接同一对话
+          if (conversationId && !currentConversation?.id) {
+            selectConversation({ id: conversationId, title: '', messages: [], createdAt: '', updatedAt: '', messageCount: 0 });
             loadConversations();
           }
         },
