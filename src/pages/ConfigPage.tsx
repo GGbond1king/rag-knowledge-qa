@@ -37,6 +37,8 @@ const PROVIDERS: ModelProvider[] = [
     models: [
       { id: 'deepseek-chat', name: 'DeepSeek Chat', maxTokens: 64000 },
       { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', maxTokens: 64000 },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', maxTokens: 131072 },
+      { id: 'deepseek-v3', name: 'DeepSeek V3', maxTokens: 64000 },
     ],
   },
   {

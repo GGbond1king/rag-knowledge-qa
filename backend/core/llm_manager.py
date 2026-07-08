@@ -20,7 +20,7 @@ PROVIDER_CONFIGS = {
     },
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
-        "models": ["deepseek-chat", "deepseek-reasoner"]
+        "models": ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v3"]
     },
     "ollama": {
         "base_url": "http://localhost:11434/v1",
