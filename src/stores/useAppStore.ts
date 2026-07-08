@@ -32,6 +32,7 @@ interface AppState {
   loadConversations: () => Promise<void>;
   selectConversation: (conv: Conversation | null) => void;
   deleteConversation: (convId: string) => Promise<void>;
+  renameConversation: (convId: string, title: string) => Promise<void>;
   addMessage: (message: Message) => void;
   clearCurrentConversation: () => void;
   setLoading: (loading: boolean) => void;
@@ -133,6 +134,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     } else {
       set({ currentConversation: null, currentMessages: [] });
+    }
+  },
+
+  renameConversation: async (convId, title) => {
+    try {
+      await chatApi.renameConversation(convId, title);
+      get().loadConversations();
+      const state = get();
+      if (state.currentConversation?.id === convId) {
+        set({ currentConversation: { ...state.currentConversation, title } });
+      }
+    } catch (error) {
+      console.error('重命名对话失败:', error);
+      throw error;
     }
   },
 

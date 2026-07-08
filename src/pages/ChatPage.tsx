@@ -14,7 +14,10 @@ import {
   ChevronUp,
   ExternalLink,
   Sparkles,
-  Loader2
+  Loader2,
+  Pencil,
+  Check,
+  X
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -37,6 +40,7 @@ const ChatPage: React.FC = () => {
     loadConversations,
     selectConversation,
     deleteConversation,
+    renameConversation,
     addMessage,
     clearCurrentConversation,
     setLoading,
@@ -45,6 +49,8 @@ const ChatPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [showSidebar, setShowSidebar] = useState(true);
   const [expandedSources, setExpandedSources] = useState<string | null>(null);
+  const [renamingConv, setRenamingConv] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   useEffect(() => {
     loadConversations();
@@ -172,6 +178,35 @@ const ChatPage: React.FC = () => {
     }
   };
 
+  const handleStartRename = (convId: string, currentTitle: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingConv(convId);
+    setRenameValue(currentTitle);
+    // 输入框自动聚焦（通过 setTimeout 确保 input 已渲染）
+    setTimeout(() => {
+      const input = document.getElementById(`rename-input-${convId}`) as HTMLInputElement;
+      input?.focus();
+      input?.select();
+    }, 50);
+  };
+
+  const handleConfirmRename = async (convId: string) => {
+    const title = renameValue.trim();
+    if (!title) return;
+    try {
+      await renameConversation(convId, title);
+      setRenamingConv(null);
+      toast.success('重命名成功');
+    } catch {
+      toast.error('重命名失败');
+    }
+  };
+
+  const handleCancelRename = () => {
+    setRenamingConv(null);
+    setRenameValue('');
+  };
+
   const handleExport = async (convId: string, title: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -240,7 +275,7 @@ const ChatPage: React.FC = () => {
           {conversations.map((conv) => (
             <button
               key={conv.id}
-              onClick={() => handleSelectConversation(conv)}
+              onClick={() => renamingConv === conv.id ? null : handleSelectConversation(conv)}
               className={`
                 w-full group flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-all
                 ${currentConversation?.id === conv.id
@@ -250,9 +285,41 @@ const ChatPage: React.FC = () => {
               `}
             >
               <MessageSquare className="w-4 h-4 flex-shrink-0" />
-              <span className="flex-1 truncate text-sm">{conv.title}</span>
-              
+
+              {renamingConv === conv.id ? (
+                <div className="flex-1 flex items-center gap-1">
+                  <input
+                    id={`rename-input-${conv.id}`}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') handleConfirmRename(conv.id);
+                      if (e.key === 'Escape') handleCancelRename();
+                    }}
+                    className="flex-1 min-w-0 px-2 py-1 text-sm bg-slate-700 border border-cyan-500 rounded text-white outline-none"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <span onClick={(e) => { e.stopPropagation(); handleConfirmRename(conv.id); }} className="p-1 hover:text-emerald-400 cursor-pointer">
+                    <Check className="w-3.5 h-3.5" />
+                  </span>
+                  <span onClick={(e) => { e.stopPropagation(); handleCancelRename(); }} className="p-1 hover:text-red-400 cursor-pointer">
+                    <X className="w-3.5 h-3.5" />
+                  </span>
+                </div>
+              ) : (
+                <span className="flex-1 truncate text-sm">{conv.title}</span>
+              )}
+
+              {renamingConv !== conv.id && (
               <div className="hidden group-hover:flex items-center gap-1 opacity-70">
+                <span
+                  onClick={(e) => handleStartRename(conv.id, conv.title, e)}
+                  className="p-1 hover:text-cyan-400 cursor-pointer"
+                  title="重命名"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </span>
                 <span
                   onClick={(e) => handleExport(conv.id, conv.title, e)}
                   className="p-1 hover:text-cyan-400 cursor-pointer"
@@ -268,6 +335,7 @@ const ChatPage: React.FC = () => {
                   <Trash2 className="w-3.5 h-3.5" />
                 </span>
               </div>
+              )}
             </button>
           ))}
 

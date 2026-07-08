@@ -212,15 +212,37 @@ async def get_conversation_detail(conv_id: str):
     }
 
 
+@router.put("/chat/history/{conv_id}/rename")
+async def rename_conversation(conv_id: str, body: dict):
+    """重命名对话"""
+    conversation = _load_conversation(conv_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    new_title = body.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+
+    conversation["title"] = new_title
+    conversation["updated_at"] = datetime.now().isoformat()
+    _save_conversation(conversation)
+
+    return {
+        "success": True,
+        "data": {"id": conv_id, "title": new_title},
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 @router.delete("/chat/history/{conv_id}")
 async def delete_conversation(conv_id: str):
     """删除指定对话"""
     filepath = f"{CONVERSATIONS_DIR}/{conv_id}.json"
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="对话不存在")
-    
+
     os.remove(filepath)
-    
+
     return {
         "success": True,
         "data": {"message": "对话已删除"},

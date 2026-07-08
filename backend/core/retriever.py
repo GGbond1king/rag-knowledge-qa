@@ -1,13 +1,15 @@
 """
 检索引擎与RAG管道 - 核心RAG逻辑实现
 
-使用纯Python实现向量存储和检索，不依赖chromadb的C扩展。
-如果chromadb可用则使用它，否则使用内置的InMemoryVectorStore。
+使用纯Python实现向量存储和检索（ChromaDB因Windows兼容性不可用时）。
+支持 pickle 二进制持久化、余弦相似度搜索、BM25 混合检索。
 """
 import uuid
 import json
 import math
 import os
+import pickle
+import re
 from typing import AsyncGenerator, List, Tuple, Optional
 from datetime import datetime
 
@@ -21,42 +23,42 @@ from models.schemas import (
 )
 
 
-# ====== 纯Python内存向量存储（零依赖Fallback）======
+# ====== 纯Python内存向量存储（零依赖，pickle持久化）======
 
 class InMemoryVectorStore:
     """
-    纯Python实现的内存向量存储
-    
-    使用余弦相似度进行检索，支持持久化到JSON文件。
+    纯Python内存向量存储
+
+    使用余弦相似度进行检索，pickle 二进制持久化（比JSON快10-100倍）。
     完全不依赖任何C扩展库。
     """
-    
-    def __init__(self, persist_path: str = "./data/vector_store.json"):
+
+    def __init__(self, persist_path: str = "./data/vector_store.pkl"):
         self.persist_path = persist_path
         self.vectors: List[dict] = []  # 每项: {id, embedding, content, metadata}
         self._loaded = False
-    
+
     def _ensure_loaded(self):
         """延迟加载持久化数据"""
         if self._loaded:
             return
         self._loaded = True
-        
+
         if os.path.exists(self.persist_path):
             try:
-                with open(self.persist_path, 'r', encoding='utf-8') as f:
-                    self.vectors = json.load(f)
+                with open(self.persist_path, 'rb') as f:
+                    self.vectors = pickle.load(f)
                 print(f"[VectorStore] 从文件加载了 {len(self.vectors)} 条向量记录")
             except Exception as e:
                 print(f"[VectorStore] 加载失败，使用空存储: {e}")
                 self.vectors = []
-    
+
     def _save(self):
-        """持久化到文件"""
+        """持久化到文件（pickle二进制格式）"""
         try:
             os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
-            with open(self.persist_path, 'w', encoding='utf-8') as f:
-                json.dump(self.vectors, f, ensure_ascii=False)
+            with open(self.persist_path, 'wb') as f:
+                pickle.dump(self.vectors, f, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception as e:
             print(f"[VectorStore] 持久化失败: {e}")
     
@@ -186,7 +188,88 @@ class InMemoryVectorStore:
             self._save()
 
 
-# ====== ChromaDB包装器（可选）======
+# ====== BM25 关键词检索引擎 ======
+
+class BM25Index:
+    """
+    BM25 关键词检索引擎
+
+    基于 rank_bm25 实现，提供关键词层面的检索能力。
+    与向量检索形成双路互补：向量负责语义，BM25负责精确匹配。
+    """
+
+    def __init__(self):
+        self._index = None
+        self._documents: List[tuple] = []  # [(content, metadata), ...]
+        self._dirty = True
+
+    def _tokenize(self, text: str) -> List[str]:
+        """中文+英文混合分词"""
+        # 中文单字+双字
+        tokens = []
+        chinese_chars = re.findall(r'[一-鿿]+', text)
+        for cc in chinese_chars:
+            tokens.extend(list(cc))  # 单字
+            for i in range(len(cc) - 1):
+                tokens.append(cc[i:i+2])  # 双字
+
+        # 英文单词
+        tokens.extend(w.lower() for w in re.findall(r'[a-zA-Z][a-zA-Z0-9]*', text))
+        # 数字
+        tokens.extend(re.findall(r'\d+(?:\.\d+)?', text))
+
+        return [t for t in tokens if len(t) > 0]
+
+    def rebuild(self, vectors: List[dict]):
+        """从向量存储重建BM25索引"""
+        from rank_bm25 import BM25Okapi
+
+        self._documents = [(v['content'], v['metadata']) for v in vectors]
+        tokenized_corpus = [self._tokenize(doc[0]) for doc in self._documents]
+
+        if tokenized_corpus:
+            self._index = BM25Okapi(tokenized_corpus)
+        else:
+            self._index = None
+        self._dirty = False
+
+    def mark_dirty(self):
+        """标记索引需要重建"""
+        self._dirty = True
+
+    def search(self, query: str, top_k: int = 4) -> List[dict]:
+        """
+        BM25搜索
+
+        Returns: [{content, metadata, bm25_score}, ...]
+        """
+        if not self._index or self._dirty:
+            return []
+
+        tokenized_query = self._tokenize(query)
+        if not tokenized_query:
+            return []
+
+        try:
+            scores = self._index.get_scores(tokenized_query)
+        except Exception:
+            return []
+
+        indexed = list(enumerate(scores))
+        indexed.sort(key=lambda x: x[1], reverse=True)
+
+        results = []
+        for idx, score in indexed[:top_k]:
+            if score > 0:
+                results.append({
+                    'content': self._documents[idx][0],
+                    'metadata': self._documents[idx][1],
+                    'bm25_score': float(score),
+                })
+        return results
+
+
+# ====== ChromaDB包装器（跨平台备用）======
 
 class ChromaDBWrapper:
     """ChromaDB适配器，提供与InMemoryVectorStore相同的接口"""
@@ -263,117 +346,109 @@ class ChromaDBWrapper:
 # ====== 检索引擎（自动选择后端）======
 
 class Retriever:
-    """向量检索引擎 - 自动选择最佳后端"""
-    
+    """检索引擎 - 向量 + BM25 双路召回"""
+
     def __init__(self):
         self.config_manager = ConfigManager()
-        self._store = None  # 延迟初始化
-        self._use_chroma = None  # None=未检测, True/False=已决定
-    
+        self._store = None
+        self.bm25 = BM25Index()
+
     def _get_store(self):
-        """获取向量存储实例（使用纯Python实现）"""
         if self._store is not None:
             return self._store
-        
-        # 直接使用纯Python内存向量存储，不尝试ChromaDB（避免Windows DLL崩溃）
         self._store = InMemoryVectorStore()
-        self._use_chroma = False
         print("[Retriever] 使用纯Python内存向量存储")
-        
         return self._store
-    
+
     def add_documents(self, chunks: List[DocumentChunk], embeddings: List[List[float]]):
-        """添加文档到向量数据库"""
         store = self._get_store()
         ids = [f"{chunk.metadata['source_id']}_{chunk.metadata['chunk_index']}" for chunk in chunks]
         store.upsert(
-            ids=ids,
-            embeddings=embeddings,
+            ids=ids, embeddings=embeddings,
             documents=[chunk.content for chunk in chunks],
             metadatas=[chunk.metadata for chunk in chunks]
         )
-    
+        self.bm25.mark_dirty()
+
     def delete_document(self, source_id: str):
-        """删除指定文档的所有块"""
         store = self._get_store()
         store.delete_by_source(source_id)
-    
+        self.bm25.mark_dirty()
+
+    def _ensure_bm25_built(self):
+        if self.bm25._dirty:
+            store = self._get_store()
+            store._ensure_loaded()
+            self.bm25.rebuild(store.vectors)
+
     def search(self, query_embedding: List[float], query_text: str = "",
                top_k: int = 4, threshold: float = 0.7) -> Tuple[List[dict], bool]:
-        """向量相似度搜索（混合关键词评分）"""
+        """双路召回：向量检索 + BM25 - RRF 合并"""
         store = self._get_store()
-        
+        self._ensure_bm25_built()
+
         try:
-            # 多取候选结果用于重排序
             fetch_k = max(top_k * 3, 12)
-            results = store.query(query_embedding, top_k=fetch_k)
-            
-            if not results['ids'] or not results['ids'][0]:
-                return [], False
-            
-            # 提取查询关键词
-            import re
-            chinese_chars = set(re.findall(r'[\u4e00-\u9fff]+', query_text))
-            query_terms = set()
-            for cc in chinese_chars:
-                for l in range(1, min(len(cc) + 1, 4)):
-                    for i in range(len(cc) - l + 1):
-                        query_terms.add(cc[i:i+l])
-            # 也加入英文单词和数字
-            query_terms.update(re.findall(r'[a-zA-Z]+', query_text.lower()))
-            query_terms.update(re.findall(r'\d+(?:\.\d+)?', query_text))
-            
-            scored_candidates = []
-            
-            for i, doc_id in enumerate(results['ids'][0]):
-                distance = results['distances'][0][i]
-                vec_sim = 1 - distance
-                content = results['documents'][0][i]
-                
-                # 关键词重叠评分
-                content_lower = content.lower()
-                keyword_hits = sum(1 for t in query_terms if t in content_lower)
-                keyword_score = min(keyword_hits / max(len(query_terms), 1), 1.0)
-                
-                # 混合得分：60% 向量相似度 + 40% 关键词匹配
-                hybrid_score = vec_sim * 0.6 + keyword_score * 0.4
-                
-                result_item = {
-                    'id': doc_id,
-                    'content': content,
-                    'metadata': results['metadatas'][0][i] if results.get('metadatas') else {},
-                    'similarity': hybrid_score,
-                    '_vec_sim': vec_sim,
-                    '_keyword_score': keyword_score
+            vec_results = store.query(query_embedding, top_k=fetch_k)
+            bm25_results = self.bm25.search(query_text, top_k=fetch_k)
+
+            K = 60
+            score_map = {}
+
+            for rank, (doc_id, content, meta) in enumerate(zip(
+                vec_results['ids'][0], vec_results['documents'][0],
+                vec_results['metadatas'][0]
+            )):
+                key = content[:100]
+                vec_sim = 1 - vec_results['distances'][0][rank]
+                if vec_sim < 0.1:
+                    continue
+                score_map[key] = {
+                    'id': doc_id, 'content': content, 'metadata': meta,
+                    'rrf': 1.0 / (K + rank)
                 }
-                
-                scored_candidates.append(result_item)
-            
-            # 按混合得分降序排列，取 top_k
-            scored_candidates.sort(key=lambda x: x['similarity'], reverse=True)
-            final_results = scored_candidates[:top_k]
-            
-            # 去掉内部调试字段
-            for r in final_results:
-                r.pop('_vec_sim', None)
-                r.pop('_keyword_score', None)
-            
+
+            for rank, bm25_item in enumerate(bm25_results):
+                key = bm25_item['content'][:100]
+                if key not in score_map:
+                    score_map[key] = {
+                        'id': bm25_item['metadata'].get('source_id', ''),
+                        'content': bm25_item['content'],
+                        'metadata': bm25_item['metadata'],
+                        'rrf': 0.0
+                    }
+                score_map[key]['rrf'] += 1.0 / (K + rank)
+
+            if not score_map:
+                return [], False
+
+            ranked = sorted(score_map.values(), key=lambda x: x['rrf'], reverse=True)
+            max_rrf = max(x['rrf'] for x in ranked) or 1.0
+
+            final_results = []
+            for item in ranked[:top_k]:
+                final_results.append({
+                    'id': item['id'],
+                    'content': item['content'],
+                    'metadata': item['metadata'],
+                    'similarity': item['rrf'] / max_rrf,
+                })
+
             found_good = any(r['similarity'] >= threshold for r in final_results)
-            
             return final_results, found_good
-            
+
         except Exception as e:
-            print(f"搜索出错: {e}")
+            print(f"[Retriever] 搜索出错: {e}")
             return [], False
-    
+
     def get_stats(self) -> dict:
-        """获取统计信息"""
         store = self._get_store()
         try:
             return {"total_chunks": store.count()}
         except Exception as e:
-            print(f"获取统计信息出错: {e}")
+            print(f"[Retriever] 统计出错: {e}")
             return {"total_chunks": 0}
+
 
 
 # ====== RAG管道 ======

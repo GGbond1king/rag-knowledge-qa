@@ -67,9 +67,22 @@ class ConfigManager:
             return False
     
     def get_api_key(self) -> Optional[str]:
-        """获取API Key"""
+        """获取API Key（优先使用配置文件，其次环境变量）"""
         config = self.load_config()
-        return config.api_key if config.api_key else None
+        if config.api_key:
+            return config.api_key
+
+        # 环境变量 fallback
+        provider_env_map = {
+            "openai": "OPENAI_API_KEY",
+            "qwen": "QWEN_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "bailian": "BAILIAN_API_KEY",
+        }
+        env_key = provider_env_map.get(config.provider.value)
+        if env_key:
+            return os.getenv(env_key)
+        return None
     
     def get_base_url(self) -> Optional[str]:
         """获取自定义Base URL"""

@@ -12,6 +12,7 @@ class ProviderType(str, Enum):
     QWEN = "qwen"
     DEEPSEEK = "deepseek"
     OLLAMA = "ollama"
+    BAILIAN = "bailian"
 
 
 class FileType(str, Enum):

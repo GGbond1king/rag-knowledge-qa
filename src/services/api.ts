@@ -131,6 +131,10 @@ export const chatApi = {
     await apiClient.delete(`/chat/history/${convId}`);
   },
 
+  async renameConversation(convId: string, title: string): Promise<void> {
+    await apiClient.put(`/chat/history/${convId}/rename`, { title });
+  },
+
   async exportConversation(convId: string): Promise<Blob> {
     const response = await apiClient.post(
       `/chat/history/${convId}/export`,

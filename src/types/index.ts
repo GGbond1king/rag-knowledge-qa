@@ -1,6 +1,6 @@
 // ====== 枚举类型 ======
 
-export type ProviderType = 'openai' | 'qwen' | 'deepseek' | 'ollama';
+export type ProviderType = 'openai' | 'qwen' | 'deepseek' | 'ollama' | 'bailian';
 export type FileType = 'txt' | 'pdf' | 'docx';
 export type DocumentStatus = 'processing' | 'indexed' | 'failed';
 export type MessageRole = 'user' | 'assistant';

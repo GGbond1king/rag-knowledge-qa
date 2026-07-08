@@ -40,6 +40,19 @@ const PROVIDERS: ModelProvider[] = [
     ],
   },
   {
+    id: 'bailian',
+    name: '阿里云百炼',
+    apiKeyRequired: true,
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: [
+      { id: 'glm-5', name: 'GLM-5', maxTokens: 131072 },
+      { id: 'glm-4', name: 'GLM-4', maxTokens: 131072 },
+      { id: 'qwen-max', name: 'Qwen-Max', maxTokens: 32000 },
+      { id: 'qwen-plus', name: 'Qwen-Plus', maxTokens: 131072 },
+      { id: 'qwen-turbo', name: 'Qwen-Turbo', maxTokens: 131072 },
+    ],
+  },
+  {
     id: 'ollama',
     name: 'Ollama 本地',
     apiKeyRequired: false,
@@ -234,6 +247,7 @@ const ConfigPage: React.FC = () => {
             onChange={(e) => setForm({ ...form, embeddingModel: e.target.value })}
             className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-cyan-500 transition-all appearance-none cursor-pointer"
           >
+            <option value="text-embedding-v3">text-embedding-v3 (阿里云百炼，1024维)</option>
             <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2 (通用英文，384维)</option>
             <option value="multilingual-e5-large">multilingual-e5-large (中英双语，1024维)</option>
             <option value="bge-large-zh-v1.5">bge-large-zh-v1.5 (中文优化，1024维)</option>

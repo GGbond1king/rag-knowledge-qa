@@ -25,6 +25,10 @@ PROVIDER_CONFIGS = {
     "ollama": {
         "base_url": "http://localhost:11434/v1",
         "models": []  # Ollama动态获取可用模型
+    },
+    "bailian": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": ["glm-5", "glm-4", "qwen-max", "qwen-plus", "qwen-turbo"]
     }
 }
 
@@ -122,58 +126,49 @@ class LLMManager:
             yield f"请求失败: {str(e)}"
     
     async def get_embedding(self, text: str) -> list:
-        """获取文本的向量嵌入"""
+        """获取文本的向量嵌入（API优先，纯Python兜底）"""
         config = self.config_manager.load_config()
-        
-        # 方案1: 使用纯Python轻量级嵌入（无需任何外部运行时）
+        api_key = self.config_manager.get_api_key()
+        provider_id = config.provider.value
+
+        # 方案1: API嵌入（真正的语义向量，优先使用）
+        if api_key:
+            try:
+                base_url = config.custom_base_url or PROVIDER_CONFIGS.get(provider_id, {}).get("base_url", "")
+                if not base_url:
+                    raise ValueError("未配置API地址")
+
+                # Bailian / OpenAI 兼容嵌入API
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                # 模型名映射：bailian→text-embedding-v3，其他→config中配置的embedding_model
+                embed_model = config.embedding_model
+                if provider_id == "bailian" and embed_model in ("all-MiniLM-L6-v2", ""):
+                    embed_model = "text-embedding-v3"
+
+                payload = {"model": embed_model, "input": text}
+                client = await self._get_client()
+                response = await client.post(
+                    f"{base_url}/embeddings", json=payload, headers=headers
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["data"][0]["embedding"]
+                else:
+                    print(f"API Embedding 返回 {response.status_code}，降级到本地方案")
+            except Exception as e:
+                print(f"API Embedding 失败: {e}，降级到本地方案")
+
+        # 方案2: 纯Python轻量级嵌入（零依赖兜底）
         try:
             from core.embeddings import get_embedding_function
             ef = get_embedding_function()
             result = ef.embed([text])
             return result[0]
         except Exception as e:
-            print(f"本地纯Python Embedding失败: {e}")
-        
-        # 方案2: 尝试ChromaDB内置的DefaultEmbeddingFunction（需要onnxruntime）
-        try:
-            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
-            ef = DefaultEmbeddingFunction()
-            result = ef([text])
-            vec = result[0]
-            return vec.tolist() if hasattr(vec, 'tolist') else list(vec)
-        except Exception as e:
-            print(f"ChromaDB DefaultEmbeddingFunction失败: {e}")
-        
-        # 方案3: 回退到API方式
-        provider_id = config.provider.value
-        base_url = config.custom_base_url or PROVIDER_CONFIGS.get(provider_id, {}).get("base_url", "")
-        
-        if not config.api_key:
             raise ValueError(
-                "Embedding生成失败。\n"
-                "请先在【系统配置】页面填写AI模型的API Key后再上传文档。\n"
-                "推荐使用 DeepSeek 或 OpenAI 的API Key。"
+                f"Embedding 全部方案失败: {e}\n"
+                "请检查API Key配置是否正确，或网络是否可访问。"
             )
-        
-        headers = {
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": config.embedding_model,
-            "input": text
-        }
-        
-        client = await self._get_client()
-        response = await client.post(
-            f"{base_url}/embeddings",
-            json=payload,
-            headers=headers
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data["data"][0]["embedding"]
-        else:
-            raise Exception(f"Embedding API返回错误: {response.status_code}")
