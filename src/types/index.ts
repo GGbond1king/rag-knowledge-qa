@@ -49,13 +49,13 @@ export interface AppConfig {
 export interface Document {
   id: string;
   filename: string;
-  originalName: string;
-  fileType: FileType;
-  fileSize: number;
-  uploadTime: string;
+  original_name: string;   // 后端 snake_case
+  file_type: FileType;
+  file_size: number;
+  upload_time: string;
   status: DocumentStatus;
-  chunkCount: number;
-  errorMessage?: string;
+  chunk_count: number;
+  error_message?: string;
 }
 
 export interface UploadProgress {

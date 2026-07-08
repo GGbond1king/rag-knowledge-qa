@@ -19,16 +19,16 @@ import type { Document, DocumentStatus } from '../types';
 import { useAppStore } from '../stores/useAppStore';
 
 const KnowledgePage: React.FC = () => {
-  const { 
-    documents, 
-    documentsLoading, 
-    stats, 
-    loadDocuments, 
-    uploadFile, 
-    deleteDocument, 
-    loadStats 
+  const {
+    documents,
+    documentsLoading,
+    stats,
+    loadDocuments,
+    uploadFile,
+    deleteDocument,
+    loadStats
   } = useAppStore();
-  
+
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -52,7 +52,7 @@ const KnowledgePage: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       await handleFileUpload(e.dataTransfer.files[0]);
     }
@@ -61,22 +61,19 @@ const KnowledgePage: React.FC = () => {
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       await handleFileUpload(e.target.files[0]);
-      // 重置input以允许重复选择同一文件
       e.target.value = '';
     }
   };
 
   const handleFileUpload = async (file: File) => {
-    // 验证文件类型
     const allowedTypes = ['.txt', '.pdf', '.docx'];
     const fileExt = '.' + file.name.split('.').pop()?.toLowerCase();
-    
+
     if (!allowedTypes.includes(fileExt)) {
       toast.error(`不支持的文件类型: ${fileExt}，请上传TXT/PDF/Word文件`);
       return;
     }
 
-    // 验证文件大小（50MB）
     if (file.size > 50 * 1024 * 1024) {
       toast.error('文件大小超过50MB限制');
       return;
@@ -110,6 +107,7 @@ const KnowledgePage: React.FC = () => {
   };
 
   const formatFileSize = (bytes: number): string => {
+    if (!bytes && bytes !== 0) return '未知';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -156,7 +154,6 @@ const KnowledgePage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* 页面标题 */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white mb-2">知识库管理</h1>
         <p className="text-slate-400 text-sm">上传文档并构建可检索的知识库</p>
@@ -170,24 +167,24 @@ const KnowledgePage: React.FC = () => {
               <Files className="w-5 h-5 text-cyan-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-white">{stats.totalFiles || documents.length}</p>
+              <p className="text-2xl font-bold text-white">{stats.total_files || documents.length}</p>
               <p className="text-xs text-slate-400">文档总数</p>
             </div>
           </div>
         </div>
-        
+
         <div className="bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 rounded-xl p-4">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-emerald-500/20">
               <Database className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-white">{stats.totalChunks || stats.dbTotalChunks || 0}</p>
+              <p className="text-2xl font-bold text-white">{stats.total_chunks || stats.db_total_chunks || 0}</p>
               <p className="text-xs text-slate-400">向量分块</p>
             </div>
           </div>
         </div>
-        
+
         <div className="bg-gradient-to-br from-violet-500/10 to-transparent border border-violet-500/20 rounded-xl p-4">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-violet-500/20">
@@ -195,7 +192,7 @@ const KnowledgePage: React.FC = () => {
             </div>
             <div>
               <p className="text-2xl font-bold text-white">
-                {(documents.reduce((acc, doc) => acc + doc.fileSize, 0) / (1024 * 1024)).toFixed(1)}MB
+                {(documents.reduce((acc: number, doc: Document) => acc + (doc.file_size || 0), 0) / (1024 * 1024)).toFixed(1)}MB
               </p>
               <p className="text-xs text-slate-400">总大小</p>
             </div>
@@ -226,7 +223,7 @@ const KnowledgePage: React.FC = () => {
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           disabled={uploading}
         />
-        
+
         <div className="space-y-3">
           {uploading ? (
             <>
@@ -250,8 +247,7 @@ const KnowledgePage: React.FC = () => {
             </>
           )}
         </div>
-        
-        {/* 支持的格式标签 */}
+
         <div className="flex items-center justify-center gap-2 mt-4">
           {['TXT', 'PDF', 'DOCX'].map((format) => (
             <span key={format} className="px-2.5 py-1 bg-slate-800 rounded-md text-xs text-slate-400 font-mono">
@@ -268,7 +264,7 @@ const KnowledgePage: React.FC = () => {
             <Files className="w-5 h-5 text-slate-400" />
             已上传文档
           </h2>
-          
+
           <button
             onClick={() => { loadDocuments(); loadStats(); }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
@@ -295,23 +291,21 @@ const KnowledgePage: React.FC = () => {
                 key={doc.id}
                 className="group bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-all duration-200"
               >
-                {/* 卡片头部 */}
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-slate-800">
-                      {getFileIcon(doc.fileType)}
+                      {getFileIcon(doc.file_type)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-white truncate max-w-[180px]" title={doc.originalName}>
-                        {doc.originalName}
+                      <p className="text-sm font-medium text-white truncate max-w-[180px]" title={doc.original_name}>
+                        {doc.original_name}
                       </p>
-                      <p className="text-xs text-slate-500 mt-0.5">{formatFileSize(doc.fileSize)}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{formatFileSize(doc.file_size)}</p>
                     </div>
                   </div>
-                  
-                  {/* 删除按钮 */}
+
                   <button
-                    onClick={() => handleDelete(doc.id, doc.originalName)}
+                    onClick={() => handleDelete(doc.id, doc.original_name)}
                     disabled={deletingId === doc.id}
                     className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-all"
                   >
@@ -323,28 +317,25 @@ const KnowledgePage: React.FC = () => {
                   </button>
                 </div>
 
-                {/* 状态信息 */}
                 <div className="flex items-center justify-between pt-3 border-t border-slate-800/50">
                   {getStatusBadge(doc.status)}
-                  
-                  {doc.chunkCount > 0 && (
+
+                  {doc.chunk_count > 0 && (
                     <span className="text-xs text-slate-500">
-                      {doc.chunkCount} 个分块
+                      {doc.chunk_count} 个分块
                     </span>
                   )}
                 </div>
 
-                {/* 错误信息 */}
-                {doc.errorMessage && (
+                {doc.error_message && (
                   <p className="mt-2 text-xs text-red-400 flex items-start gap-1">
                     <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                    {doc.errorMessage.length > 50 ? doc.errorMessage.substring(0, 50) + '...' : doc.errorMessage}
+                    {doc.error_message.length > 50 ? doc.error_message.substring(0, 50) + '...' : doc.error_message}
                   </p>
                 )}
 
-                {/* 上传时间 */}
                 <p className="mt-2 text-xs text-slate-600">
-                  {new Date(doc.uploadTime).toLocaleString('zh-CN')}
+                  {new Date(doc.upload_time).toLocaleString('zh-CN')}
                 </p>
               </div>
             ))}
