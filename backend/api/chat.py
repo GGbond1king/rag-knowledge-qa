@@ -143,20 +143,32 @@ async def chat_message(request: ChatRequest):
             yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
 
         finally:
-            # 保存助手回复到对话历史
-            assistant_msg = {
-                "id": str(uuid.uuid4()),
-                "role": MessageRole.ASSISTANT.value,
-                "content": full_content,
-                "timestamp": datetime.now().isoformat(),
-                "sources": [s if isinstance(s, dict) else s.model_dump() for s in sources],
-                "search_results": search_results,
-                "mode": mode
-            }
-            conversation['messages'].append(assistant_msg)
-            conversation['message_count'] += 1
-            conversation['updated_at'] = datetime.now().isoformat()
-            _save_conversation(conversation)
+            try:
+                sources_serialized = []
+                for s in sources:
+                    if isinstance(s, dict):
+                        sources_serialized.append(s)
+                    else:
+                        try:
+                            sources_serialized.append(s.model_dump())
+                        except Exception:
+                            sources_serialized.append({"document_name": "未知"})
+
+                assistant_msg = {
+                    "id": str(uuid.uuid4()),
+                    "role": MessageRole.ASSISTANT.value,
+                    "content": full_content or "",
+                    "timestamp": datetime.now().isoformat(),
+                    "sources": sources_serialized,
+                    "search_results": list(search_results) if search_results else [],
+                    "mode": mode or AnswerMode.LOCAL.value
+                }
+                conversation['messages'].append(assistant_msg)
+                conversation['message_count'] += 1
+                conversation['updated_at'] = datetime.now().isoformat()
+                _save_conversation(conversation)
+            except Exception as save_err:
+                print(f"[Chat] 保存对话失败: {save_err}")
     
     return StreamingResponse(
         generate(),

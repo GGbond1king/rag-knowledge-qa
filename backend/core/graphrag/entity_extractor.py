@@ -88,13 +88,16 @@ class EntityExtractor:
         if not query or len(query) < 2:
             return []
 
+        # 简短查询（<4字）或问个人问题的，不调LLM，直接走规则提取
+        if len(query) < 4 or query in ("我是谁", "你叫什么", "你是谁"):
+            return self._fallback_extract(query)
+
         try:
             result = await self._call_llm_extract(SYSTEM_QUERY_ENTITIES, query)
             entities = self._parse_query_entities(result)
             return [e.strip() for e in entities if len(e.strip()) >= 1]
         except Exception as e:
             print(f"[EntityExtractor] 查询实体抽取失败: {e}")
-            # 回退：提取引号内的词 + 专业术语
             return self._fallback_extract(query)
 
     async def _call_llm_extract(self, system_prompt: str, text: str) -> str:
@@ -127,7 +130,7 @@ class EntityExtractor:
         }
 
         import httpx
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:  # 10s超时，不影响主流程
             response = await client.post(
                 f"{base_url}/chat/completions",
                 json=payload,
