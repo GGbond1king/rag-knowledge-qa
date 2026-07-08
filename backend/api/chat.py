@@ -115,30 +115,33 @@ async def chat_message(request: ChatRequest):
         sources = []
         search_results = []
         mode = AnswerMode.LOCAL.value
-        
+        graph_entities = []
+
         try:
             async for result in _rag_pipeline_instance.query(request, history_msgs):
                 token_data = result.get('token', '')
                 full_content += token_data
-                
+
                 if result.get('sources'):
                     sources = result['sources']
                 if result.get('search_results'):
                     search_results = result['search_results']
                 if result.get('mode'):
                     mode = result['mode']
-                
+                if result.get('graph_entities'):
+                    graph_entities = result['graph_entities']
+
                 # 发送SSE事件
                 yield f"data: {json.dumps({'token': token_data, 'conversation_id': conv_id}, ensure_ascii=False)}\n\n"
-            
+
             # 流结束标记
             yield f"data: [DONE]\n\n"
-            
+
         except Exception as e:
             error_msg = f"处理出错: {str(e)}"
             full_content = error_msg
             yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
-        
+
         finally:
             # 保存助手回复到对话历史
             assistant_msg = {

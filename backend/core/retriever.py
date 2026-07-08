@@ -2,7 +2,7 @@
 检索引擎与RAG管道 - 核心RAG逻辑实现
 
 使用纯Python实现向量存储和检索（ChromaDB因Windows兼容性不可用时）。
-支持 pickle 二进制持久化、余弦相似度搜索、BM25 混合检索。
+支持 pickle 二进制持久化、余弦相似度搜索、BM25 混合检索、GraphRAG 知识图谱检索。
 """
 import uuid
 import json
@@ -17,6 +17,7 @@ from core.config import ConfigManager
 from core.document_processor import DocumentProcessor, DocumentChunk
 from core.llm_manager import LLMManager
 from core.web_search import get_web_search_agent
+from core.graphrag.graph_retriever import GraphRetriever
 from models.schemas import (
     AppConfig, MessageModel, MessageRole, AnswerMode,
     SourceReference, SearchResultItem, ChatRequest
@@ -473,18 +474,29 @@ class RAGPipeline:
 3. 对搜索结果进行综合分析和总结
 4. 如果搜索结果不够全面，说明局限性
 5. 使用中文回答"""
-    
+
+    SYSTEM_PROMPT_GRAPH = """你是一个智能知识库助手。你的任务是基于提供的文档内容和知识图谱信息来回答用户的问题。
+
+规则：
+1. 同时参考文档内容（参考资料）和知识图谱中的实体关系来回答问题
+2. 如果文档和图谱信息能相互印证，综合给出答案
+3. 当问题涉及实体间的关系时，优先使用知识图谱中的关系链来回答
+4. 如果知识图谱中的关系和文档内容一致，引用具体的文档来源
+5. 回答要准确、简洁、有条理
+6. 使用中文回答"""
+
     def __init__(self):
         self.retriever = Retriever()
         self.document_processor = DocumentProcessor()
         self.llm_manager = LLMManager()
         self.config_manager = ConfigManager()
+        self.graph_retriever = GraphRetriever()
     
     async def query(self, request: ChatRequest,
                     conversation_history: List[MessageModel] = None) -> AsyncGenerator[dict, None]:
         config = self.config_manager.load_config()
         question = request.message
-        
+
         # Step 1: 问题向量化
         try:
             question_embedding = await self.llm_manager.get_embedding(question)
@@ -496,42 +508,53 @@ class RAGPipeline:
                 "search_results": []
             }
             return
-        
-        # Step 2: 向量检索
+
+        # Step 2: 文档检索（向量 + BM25）
         search_results, has_good_match = self.retriever.search(
             query_embedding=question_embedding,
             query_text=question,
             top_k=config.retrieval_top_k,
             threshold=config.similarity_threshold
         )
-        
-        # Step 3: 决定模式 - 先搜文档，没有则自动联网搜索
+
+        # Step 3: 图谱检索（并行，不依赖阈值）
+        graph_context = ""
+        graph_entities = []
+        try:
+            graph_text, subgraph, entities = await self.graph_retriever.search(
+                question, top_k=config.retrieval_top_k, max_depth=2
+            )
+            if graph_text:
+                graph_context = graph_text
+                graph_entities = entities
+        except Exception as e:
+            print(f"[GraphRAG] 图谱检索失败: {e}")
+
+        # Step 4: 决定模式 - 先搜文档，没有则自动联网搜索
         if has_good_match and search_results:
-            # 文档有相关内容，只用文档回答
             mode = AnswerMode.LOCAL
-            context = self._build_local_context(search_results)
+            context = self._build_local_context(search_results, graph_context)
             sources = self._extract_sources(search_results)
-            system_prompt = self.SYSTEM_PROMPT_LOCAL
+            system_prompt = self.SYSTEM_PROMPT_GRAPH if graph_context else self.SYSTEM_PROMPT_LOCAL
             search_result_items = []
         else:
-            # 文档没有，自动联网搜索
             mode = AnswerMode.WEB
             web_agent = get_web_search_agent()
             web_results = await web_agent.search(question)
-            
+
             if web_results:
                 context = web_agent.format_context_for_llm(web_results)
                 search_result_items = web_results
             else:
                 context = "未找到相关的网络搜索结果。"
                 search_result_items = []
-            
+
             sources = []
             system_prompt = self.SYSTEM_PROMPT_WEB
-        
-        # Step 4 & 5: 构建消息并流式生成
+
+        # Step 5: 构建消息并流式生成
         messages = self._build_messages(system_prompt, context, question, conversation_history or [])
-        
+
         full_response = ""
         async for token in self.llm_manager.chat_stream(messages):
             full_response += token
@@ -539,22 +562,29 @@ class RAGPipeline:
                 "token": token,
                 "mode": mode.value,
                 "sources": sources if mode == AnswerMode.LOCAL else [],
-                "search_results": [r.model_dump() for r in search_result_items] if mode == AnswerMode.WEB else []
+                "search_results": [r.model_dump() for r in search_result_items] if mode == AnswerMode.WEB else [],
+                "graph_entities": graph_entities if graph_entities else [],
+                "graph_context": graph_context if graph_context else "",
             }
     
-    def _build_local_context(self, search_results: List[dict]) -> str:
+    def _build_local_context(self, search_results: List[dict],
+                              graph_context: str = "") -> str:
         context_parts = ["以下是从文档库中检索到的相关内容：\n"]
-        
+
         for i, result in enumerate(search_results, 1):
             meta = result['metadata']
             source_file = meta.get('filename', '未知')
             page_info = f"，第{meta.get('page_number', '?')}页" if meta.get('page_number') else ""
-            
+
             context_parts.append(
                 f"\n--- 参考资料{i}（来源: {source_file}{page_info}，相关度: {result['similarity']:.2f}）---\n"
                 f"{result['content']}\n"
             )
-        
+
+        # 如果有图谱信息，追加到上下文
+        if graph_context:
+            context_parts.append(f"\n\n{graph_context}\n")
+
         context_parts.append("\n请严格基于以上参考资料回答用户的问题。")
         return "".join(context_parts)
     
@@ -586,33 +616,38 @@ class RAGPipeline:
     async def process_uploaded_file(self, file_path: str,
                                     original_name: str) -> Tuple[int, str]:
         config = self.config_manager.load_config()
-        
+
         self.document_processor.chunk_size = config.chunk_size
         self.document_processor.chunk_overlap = config.chunk_overlap
-        
+
         chunks, meta = self.document_processor.process_file(file_path, original_name)
         source_id = meta.get('source_id', str(uuid.uuid4()))
-        
+
         for chunk in chunks:
             chunk.metadata['source_id'] = source_id
-        
-        # 生成embedding（使用纯Python嵌入）
+
         all_embeddings = []
         for chunk in chunks:
             embedding = await self.llm_manager.get_embedding(chunk.content)
             all_embeddings.append(embedding)
-        
-        # 存入向量数据库
+
         self.retriever.add_documents(chunks, all_embeddings)
-        
+
+        # GraphRAG: 从文档中抽取实体关系，构建知识图谱
+        try:
+            chunk_texts = [chunk.content for chunk in chunks]
+            chunk_ids = [f"{source_id}_{i}" for i in range(len(chunks))]
+            await self.graph_retriever.index_document(
+                chunk_texts, source_doc=original_name, chunk_ids=chunk_ids
+            )
+        except Exception as e:
+            print(f"[GraphRAG] 文档 '{original_name}' 图谱索引失败: {e}")
+
         return len(chunks), source_id
-    
+
     def delete_document_from_db(self, source_id: str):
         self.retriever.delete_document(source_id)
 
-
-# 全局单例
-_rag_pipeline: Optional[RAGPipeline] = None
 
 def get_rag_pipeline() -> RAGPipeline:
     global _rag_pipeline
