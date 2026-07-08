@@ -649,6 +649,10 @@ class RAGPipeline:
         self.retriever.delete_document(source_id)
 
 
+# 全局单例
+_rag_pipeline: Optional[RAGPipeline] = None
+
+
 def get_rag_pipeline() -> RAGPipeline:
     global _rag_pipeline
     if _rag_pipeline is None:
