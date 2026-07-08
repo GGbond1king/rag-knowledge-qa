@@ -103,7 +103,8 @@ async def chat_message(request: ChatRequest):
     }
     conversation['messages'].append(user_msg)
     conversation['message_count'] += 1
-    
+    _save_conversation(conversation)  # 立即持久化，保证后续请求能读到历史
+
     # 转换历史消息格式
     history_msgs = [
         MessageModel(**msg) for msg in conversation.get('messages', [])
