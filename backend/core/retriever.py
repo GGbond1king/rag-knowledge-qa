@@ -633,17 +633,24 @@ class RAGPipeline:
 
         self.retriever.add_documents(chunks, all_embeddings)
 
-        # GraphRAG: 从文档中抽取实体关系，构建知识图谱
+        return len(chunks), source_id
+
+    async def build_graph_index(self, source_id: str, original_name: str):
+        """后台构建知识图谱索引（不阻塞主流程）"""
+        store = self.retriever._get_store()
+        store._ensure_loaded()
+        chunks_text = [v['content'] for v in store.vectors
+                      if v['metadata'].get('source_id') == source_id]
+        if not chunks_text:
+            return
         try:
-            chunk_texts = [chunk.content for chunk in chunks]
-            chunk_ids = [f"{source_id}_{i}" for i in range(len(chunks))]
+            chunk_ids = [f"{source_id}_{i}" for i in range(len(chunks_text))]
             await self.graph_retriever.index_document(
-                chunk_texts, source_doc=original_name, chunk_ids=chunk_ids
+                chunks_text, source_doc=original_name, chunk_ids=chunk_ids
             )
+            print(f"[GraphRAG] 文档 '{original_name}' 图谱索引完成")
         except Exception as e:
             print(f"[GraphRAG] 文档 '{original_name}' 图谱索引失败: {e}")
-
-        return len(chunks), source_id
 
     def delete_document_from_db(self, source_id: str):
         self.retriever.delete_document(source_id)

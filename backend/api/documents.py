@@ -81,7 +81,7 @@ async def upload_file(file: UploadFile = File(...)):
     with open(upload_path, 'wb') as f:
         f.write(content)
     
-    # 创建文档记录
+    # 创建文档记录（先存为处理中，防止重复上传）
     file_type = _detect_file_type(file.filename)
     document = DocumentModel(
         id=doc_id,
@@ -92,42 +92,48 @@ async def upload_file(file: UploadFile = File(...)):
         upload_time=datetime.now().isoformat(),
         status=DocumentStatus.PROCESSING
     )
-    
-    # 保存元数据
     meta = _load_documents_meta()
     meta[doc_id] = document.model_dump()
     _save_documents_meta(meta)
-    
-    # 异步处理文档（向量化）
-    asyncio.create_task(_process_document_async(doc_id, upload_path, file.filename))
-    
-    return {
-        "success": True,
-        "data": document.model_dump(),
-        "timestamp": datetime.now().isoformat()
-    }
 
-
-async def _process_document_async(doc_id: str, file_path: str, original_name: str):
-    """异步处理文档：解析 → 分块 → 向量化"""
-    meta = _load_documents_meta()
-    
+    # 同步处理文档（解析→分块→向量化），调用方等待完成
     try:
         pipeline = get_rag_pipeline()
-        chunk_count, source_id = await pipeline.process_uploaded_file(file_path, original_name)
-        
+        chunk_count, source_id = await pipeline.process_uploaded_file(upload_path, file.filename)
+
         # 更新状态为已索引
         if doc_id in meta:
             meta[doc_id]['status'] = DocumentStatus.INDEXED.value
             meta[doc_id]['chunk_count'] = chunk_count
             _save_documents_meta(meta)
-            
+
+        # 后台构建知识图谱（不阻塞上传响应）
+        try:
+            asyncio.create_task(_build_graph_async(pipeline, source_id, file.filename))
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "data": {**document.model_dump(), "status": DocumentStatus.INDEXED.value, "chunk_count": chunk_count},
+            "timestamp": datetime.now().isoformat()
+        }
+
     except Exception as e:
         print(f"文档处理失败 [{doc_id}]: {e}")
         if doc_id in meta:
             meta[doc_id]['status'] = DocumentStatus.FAILED.value
             meta[doc_id]['error_message'] = str(e)
             _save_documents_meta(meta)
+        raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+
+
+async def _build_graph_async(pipeline, source_id: str, original_name: str):
+    """后台构建知识图谱"""
+    try:
+        await pipeline.build_graph_index(source_id, original_name)
+    except Exception as e:
+        print(f"[GraphRAG] 后台索引失败: {e}")
 
 
 @router.get("/documents")

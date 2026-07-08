@@ -131,8 +131,11 @@ class LLMManager:
         api_key = self.config_manager.get_api_key()
         provider_id = config.provider.value
 
+        # 没有Embedding接口的提供商直接跳过API方案
+        NO_EMBED_PROVIDERS = {"deepseek", "ollama"}
+
         # 方案1: API嵌入（真正的语义向量，优先使用）
-        if api_key:
+        if api_key and provider_id not in NO_EMBED_PROVIDERS:
             try:
                 base_url = config.custom_base_url or PROVIDER_CONFIGS.get(provider_id, {}).get("base_url", "")
                 if not base_url:

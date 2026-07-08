@@ -16,13 +16,32 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动时初始化数据目录和默认配置
     ensure_directories()
     config_manager = ConfigManager()
     if not config_manager.config_exists():
         config_manager.create_default_config()
+
+    # 清理上次残留的"处理中"文档（服务重启后任务已丢失）
+    try:
+        import json
+        meta_path = "./data/documents_meta.json"
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            changed = False
+            for doc_id, doc in meta.items():
+                if doc.get('status') == 'processing':
+                    doc['status'] = 'failed'
+                    doc['error_message'] = '服务重启，处理任务已取消，请重新上传'
+                    changed = True
+            if changed:
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, indent=2, ensure_ascii=False)
+                print("[Startup] 已清理残留的 processing 文档")
+    except Exception as e:
+        print(f"[Startup] 清理失败: {e}")
+
     yield
-    # 关闭时可执行清理操作
 
 
 app = FastAPI(
