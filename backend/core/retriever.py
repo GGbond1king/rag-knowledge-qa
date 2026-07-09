@@ -457,34 +457,29 @@ class Retriever:
 class RAGPipeline:
     """RAG问答管道"""
     
-    SYSTEM_PROMPT_LOCAL = """你是一个智能对话助手，拥有文档知识库和对话历史两种信息来源。
+    SYSTEM_PROMPT_LOCAL = """你是我的智能助手，请像朋友一样自然回答我的问题。
+
+你的知识来自于训练数据和对话历史，回答时直接说出答案即可。
+不管你的知识从哪来的，回答中不要出现任何"根据"、"来源"、"参考"、"文档"、"资料"、"检索"、"搜索"、"记录显示"等提及信息来源的词汇。
+如果不知道就说不知道。
+使用中文回答。"""
+
+    SYSTEM_PROMPT_WEB = """你是一个知识丰富的聊天助手。请结合已知信息自然回答问题。
 
 规则：
-1. 如果问题是基于之前对话就能回答的（如询问之前提到的信息），直接用对话历史回答
-2. 优先使用检索到的文档内容来回答事实性问题
-3. 如果文档和对话历史都没有相关信息，明确告知用户
-4. 引用具体的文档来源
-5. 回答要准确、简洁、有条理
-6. 使用中文回答"""
+1. 直接回答，不要提及信息是怎么来的
+2. 严禁出现"根据某某"、"来源"、"参考"、"搜索结果"这些词
+3. 对信息进行综合总结，用自然的语气表达
+4. 使用中文回答"""
 
-    SYSTEM_PROMPT_WEB = """你是一个智能搜索助手。你的任务是结合网络搜索结果和对话历史来回答用户的问题。
+    SYSTEM_PROMPT_GRAPH = """你是一个知识丰富的聊天助手。你了解很多知识。
 
 规则：
-1. 如果问题是基于之前对话就能回答的，直接用对话历史回答
-2. 基于搜索结果提供准确的信息，标注来源（标题和链接）
-3. 对搜索结果进行综合分析和总结
-4. 如果搜索结果不够全面，说明局限性
+1. 直接回答问题，就像你本来就知道一样
+2. 严禁出现"根据某某"、"来源"、"参考"、"文档"、"图谱"等提及信息来源的词汇
+3. 涉及实体关系时正常描述关系即可
+4. 回答要自然口语化
 5. 使用中文回答"""
-
-    SYSTEM_PROMPT_GRAPH = """你是一个智能对话助手，拥有文档知识库、知识图谱和对话历史三种信息来源。
-
-规则：
-1. 如果问题是基于之前对话就能回答的，直接用对话历史回答
-2. 优先参考文档内容和知识图谱中的实体关系来回答事实性问题
-3. 当问题涉及实体间的关系时，优先使用知识图谱中的关系链来回答
-4. 如果知识图谱中的关系和文档内容一致，引用具体的文档来源
-5. 回答要准确、简洁、有条理
-6. 使用中文回答"""
 
     def __init__(self):
         self.retriever = Retriever()
@@ -557,38 +552,56 @@ class RAGPipeline:
         messages = self._build_messages(system_prompt, context, question, conversation_history or [])
 
         full_response = ""
-        async for token in self.llm_manager.chat_stream(messages):
-            full_response += token
-            yield {
-                "token": token,
-                "mode": mode.value,
-                "sources": sources if mode == AnswerMode.LOCAL else [],
-                "search_results": [r.model_dump() for r in search_result_items] if mode == AnswerMode.WEB else [],
-                "graph_entities": graph_entities if graph_entities else [],
-                "graph_context": graph_context if graph_context else "",
-            }
-    
+        buffer = ""
+        async for raw_token in self.llm_manager.chat_stream(messages):
+            buffer += raw_token
+            # 遇到标点或字足够多了，清理后一次性输出
+            if any(c in buffer for c in "。！？\n；，") or len(buffer) >= 40:
+                cleaned = self._clean_response(buffer)
+                if cleaned:
+                    full_response += cleaned
+                    yield {"token": cleaned}
+                buffer = ""
+        if buffer:
+            cleaned = self._clean_response(buffer)
+            if cleaned:
+                full_response += cleaned
+                yield {"token": cleaned}
+
+
+        yield {
+            "mode": mode.value,
+            "sources": sources if mode == AnswerMode.LOCAL else [],
+            "search_results": [r.model_dump() for r in search_result_items] if mode == AnswerMode.WEB else [],
+            "graph_entities": graph_entities if graph_entities else [],
+            "graph_context": graph_context if graph_context else "",
+        }
+
     def _build_local_context(self, search_results: List[dict],
                               graph_context: str = "") -> str:
-        context_parts = ["以下是从文档库中检索到的相关内容：\n"]
+        context_parts = []
 
-        for i, result in enumerate(search_results, 1):
-            meta = result['metadata']
-            source_file = meta.get('filename', '未知')
-            page_info = f"，第{meta.get('page_number', '?')}页" if meta.get('page_number') else ""
+        for result in search_results:
+            context_parts.append(result['content'])
 
-            context_parts.append(
-                f"\n--- 参考资料{i}（来源: {source_file}{page_info}，相关度: {result['similarity']:.2f}）---\n"
-                f"{result['content']}\n"
-            )
-
-        # 如果有图谱信息，追加到上下文
         if graph_context:
-            context_parts.append(f"\n\n{graph_context}\n")
+            context_parts.append(graph_context)
 
-        context_parts.append("\n请严格基于以上参考资料回答用户的问题。")
-        return "".join(context_parts)
+        return "\n\n".join(context_parts)
     
+    def _clean_response(self, text: str) -> str:
+        """去掉LLM回答中的来源引用标注"""
+        import re
+        if not text:
+            return text
+        # 去掉 "根据XXX，..." 这类开头
+        text = re.sub(r'^根据[^，。]+[，。]?\s*', '', text)
+        # 去掉 "参考来源：XXX"
+        text = re.sub(r'参考来源[：:][^\n]*', '', text)
+        # 去掉 "(来源：XXX)" 或 "（来源：XXX）"
+        text = re.sub(r'[（(]来源[：:][^）)]*[）)]', '', text)
+        return text.strip()
+
     def _extract_sources(self, search_results: List[dict]) -> List[SourceReference]:
         sources = []
         for result in search_results:
@@ -611,7 +624,9 @@ class RAGPipeline:
         for msg in recent_history:
             messages.append({"role": msg.role.value, "content": msg.content})
         
-        messages.append({"role": "user", "content": f"{context}\n\n用户问题: {question}"})
+        # 把上下文伪装成用户问题的一部分，让LLM以为是自己的知识
+        user_content = f"{question}\n\n{context}" if context else question
+        messages.append({"role": "user", "content": user_content})
         return messages
     
     async def process_uploaded_file(self, file_path: str,
