@@ -103,6 +103,12 @@ async def chat_message(request: ChatRequest):
     }
     conversation['messages'].append(user_msg)
     conversation['message_count'] += 1
+
+    # 如果标题太短或太随意（<4字），用新消息替换
+    current_title = conversation.get('title', '')
+    if len(current_title) <= 4 or current_title in ('你好', 'hello', 'hi', '在吗', '您好'):
+        conversation['title'] = request.message[:30] + ("..." if len(request.message) > 30 else "")
+
     _save_conversation(conversation)  # 立即持久化，保证后续请求能读到历史
 
     # 转换历史消息格式
@@ -155,6 +161,11 @@ async def chat_message(request: ChatRequest):
                         except Exception:
                             sources_serialized.append({"document_name": "未知"})
 
+                # 重新从文件加载，避免覆盖其他请求写入的数据
+                latest = _load_conversation(conv_id) or conversation
+                if not latest.get('messages'):
+                    latest['messages'] = []
+
                 assistant_msg = {
                     "id": str(uuid.uuid4()),
                     "role": MessageRole.ASSISTANT.value,
@@ -164,10 +175,10 @@ async def chat_message(request: ChatRequest):
                     "search_results": list(search_results) if search_results else [],
                     "mode": mode or AnswerMode.LOCAL.value
                 }
-                conversation['messages'].append(assistant_msg)
-                conversation['message_count'] += 1
-                conversation['updated_at'] = datetime.now().isoformat()
-                _save_conversation(conversation)
+                latest['messages'].append(assistant_msg)
+                latest['message_count'] = len(latest['messages'])
+                latest['updated_at'] = datetime.now().isoformat()
+                _save_conversation(latest)
             except Exception as save_err:
                 print(f"[Chat] 保存对话失败: {save_err}")
     

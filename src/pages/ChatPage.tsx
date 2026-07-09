@@ -51,6 +51,7 @@ const ChatPage: React.FC = () => {
   const [expandedSources, setExpandedSources] = useState<string | null>(null);
   const [renamingConv, setRenamingConv] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const convIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadConversations();
@@ -97,9 +98,11 @@ const ChatPage: React.FC = () => {
     addMessage(assistantMessage);
 
     try {
+      // 优先用 store 里的 conversationId，没有则用 ref 兜底
+      const activeConvId = currentConversation?.id || convIdRef.current;
       await chatApi.sendMessageStream(
         {
-          conversationId: currentConversation?.id,
+          conversationId: activeConvId,
           message: message,
         },
         (token) => {
@@ -113,8 +116,9 @@ const ChatPage: React.FC = () => {
         },
         (conversationId) => {
           // 保存 conversation_id，后续消息才能续接同一对话
+          convIdRef.current = conversationId;
           if (conversationId && !currentConversation?.id) {
-            selectConversation({ id: conversationId, title: '', messages: [], createdAt: '', updatedAt: '', messageCount: 0 });
+            selectConversation({ id: conversationId, title: '', messages: [], created_at: '', updated_at: '', message_count: 0 });
             loadConversations();
           }
         },
@@ -155,6 +159,7 @@ const ChatPage: React.FC = () => {
 
   const handleNewChat = () => {
     clearCurrentConversation();
+    convIdRef.current = null;
     setInputValue('');
   };
 

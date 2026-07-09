@@ -94,16 +94,10 @@ export interface Message {
 export interface Conversation {
   id: string;
   title: string;
-  createdAt: string;
-  updatedAt: string;
-  messageCount: number;
+  created_at: string;      // 后端 snake_case
+  updated_at: string;
+  message_count: number;
   messages?: Message[];
-}
-
-export interface ChatRequest {
-  conversationId?: string;
-  message: string;
-  useWebSearch?: boolean;
 }
 
 // ====== API响应包装 ======

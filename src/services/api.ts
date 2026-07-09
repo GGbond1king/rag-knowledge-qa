@@ -65,10 +65,16 @@ export const chatApi = {
     onError: (error: string) => void
   ): Promise<void> {
     try {
+      // 后端用 snake_case，确保字段名正确传递
+      const body = JSON.stringify({
+        conversation_id: request.conversationId,
+        message: request.message,
+        use_web_search: request.useWebSearch,
+      });
       const response = await fetch(`${API_BASE_URL}/chat/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body,
       });
 
       if (!response.ok) {
